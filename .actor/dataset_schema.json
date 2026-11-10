@@ -1,0 +1,72 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "Business or place name"
+      },
+      "category": {
+        "type": "string",
+        "description": "Primary business category"
+      },
+      "address": {
+        "type": "string",
+        "description": "Full street address"
+      },
+      "phone": {
+        "type": "string",
+        "description": "Phone number"
+      },
+      "website": {
+        "type": "string",
+        "description": "Official website URL"
+      },
+      "totalScore": {
+        "type": "number",
+        "description": "Average review rating (0.0 to 5.0)"
+      },
+      "reviewsCount": {
+        "type": "integer",
+        "description": "Total number of user reviews"
+      },
+      "price": {
+        "type": "string",
+        "description": "Price level indicator ($ to $$$$)"
+      },
+      "openStatus": {
+        "type": "string",
+        "description": "Current status (e.g. Open, Closed, Open 24 hours)"
+      },
+      "openingHours": {
+        "type": "array",
+        "description": "Weekly opening schedule"
+      },
+      "latitude": {
+        "type": "number",
+        "description": "GPS Latitude coordinate"
+      },
+      "longitude": {
+        "type": "number",
+        "description": "GPS Longitude coordinate"
+      },
+      "placeId": {
+        "type": "string",
+        "description": "Unique Google Place or CID identifier"
+      },
+      "url": {
+        "type": "string",
+        "description": "Direct Google Maps URL"
+      },
+      "searchQuery": {
+        "type": "string",
+        "description": "Original search keyword used"
+      },
+      "scrapedAt": {
+        "type": "string",
+        "description": "Timestamp of extraction"
+      }
+    }
+  }
+}
