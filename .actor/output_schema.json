@@ -1,0 +1,25 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "totalQueries": {
+      "type": "integer",
+      "title": "Total Search Queries Processed"
+    },
+    "totalPlacesScraped": {
+      "type": "integer",
+      "title": "Total Places Extracted"
+    },
+    "placesWithWebsite": {
+      "type": "integer",
+      "title": "Places With Website"
+    },
+    "placesWithPhone": {
+      "type": "integer",
+      "title": "Places With Phone Number"
+    },
+    "status": {
+      "type": "string",
+      "title": "Run Status"
+    }
+  }
+}
