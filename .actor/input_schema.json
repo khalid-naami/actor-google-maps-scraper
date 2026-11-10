@@ -1,0 +1,49 @@
+{
+  "title": "Google Maps Leads Scraper Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "searchStringsArray": {
+      "title": "Search Terms / Locations",
+      "type": "array",
+      "description": "List of keywords or locations to search (e.g. 'plumbers in London', 'dentists in Chicago', 'restaurants in Paris').",
+      "prefill": [
+        "cafes in London"
+      ],
+      "editor": "json"
+    },
+    "maxCrawledPlacesPerSearch": {
+      "title": "Max Places Per Search",
+      "type": "integer",
+      "description": "Maximum number of places/businesses to extract per search query.",
+      "default": 40,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "language": {
+      "title": "Language Code",
+      "type": "string",
+      "description": "Language for interface and names (e.g. 'en', 'es', 'fr', 'de', 'ar', 'it').",
+      "default": "en",
+      "editor": "textfield"
+    },
+    "includeOpeningHours": {
+      "title": "Extract Opening Hours",
+      "type": "boolean",
+      "description": "Extract full weekly operating hours schedule if available.",
+      "default": true
+    },
+    "proxyConfiguration": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Use Apify Proxy (Residential or Datacenter) to bypass Google geoblocking and rate limits.",
+      "default": {
+        "useApifyProxy": true
+      },
+      "editor": "proxy"
+    }
+  },
+  "required": [
+    "searchStringsArray"
+  ]
+}
