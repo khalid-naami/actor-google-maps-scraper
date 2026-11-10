@@ -1,0 +1,30 @@
+{
+  "name": "actor-google-maps-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scrape Google Maps business listings, local B2B leads, addresses, phones, websites, GPS coordinates, ratings, and reviews at scale.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --check src/main.js && node --check src/extractors.js"
+  },
+  "dependencies": {
+    "apify": "^3.2.6",
+    "crawlee": "^3.11.5",
+    "playwright": "^1.49.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "google-maps",
+    "b2b-leads",
+    "local-business",
+    "google-places",
+    "lead-generation",
+    "apify-actor",
+    "crawler"
+  ],
+  "author": "Apify Developer",
+  "license": "Apache-2.0"
+}
