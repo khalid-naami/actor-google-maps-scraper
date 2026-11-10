@@ -1,0 +1,20 @@
+{
+  "actorSpecification": 1,
+  "name": "google-maps-scraper",
+  "title": "Google Maps B2B Leads Scraper (Places, Phone, Website & Reviews)",
+  "description": "Scrape Google Maps business listings, local B2B leads, addresses, phones, websites, GPS coordinates, ratings, and reviews at scale without blocks.",
+  "version": "1.0",
+  "meta": {
+    "templateId": "js-crawlee-playwright"
+  },
+  "input": "./input_schema.json",
+  "dataset": "./dataset_schema.json",
+  "output": "./output_schema.json",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "Google Maps Leads Dataset",
+      "description": "Extracted Google Maps business listings and contact records."
+    }
+  }
+}
