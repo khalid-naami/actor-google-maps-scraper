@@ -48,9 +48,72 @@ function parsePlaywrightProxy(proxyUrl) {
     }
 }
 
-await Actor.init();
+async function launchMapsSession(proxyUrl, rawLang, safeLocale) {
+    const launchOptions = {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-blink-features=AutomationControlled',
+        ],
+    };
 
-let browser = null;
+    if (proxyUrl) {
+        launchOptions.proxy = parsePlaywrightProxy(proxyUrl);
+    }
+
+    const browser = await chromium.launch(launchOptions);
+    const baseContextOptions = {
+        viewport: { width: 1280, height: 900 },
+        extraHTTPHeaders: {
+            'Accept-Language': `${rawLang},${safeLocale},en;q=0.9`,
+        },
+    };
+
+    let context = await browser.newContext({
+        ...baseContextOptions,
+        locale: safeLocale,
+    });
+
+    await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+
+    let page;
+    try {
+        page = await context.newPage();
+    } catch (localeErr) {
+        if (localeErr.message && localeErr.message.includes('Invalid locale name')) {
+            log.warning(`Browser rejected locale "${safeLocale}", recreating context with default locale...`);
+            await context.close().catch(() => {});
+            context = await browser.newContext(baseContextOptions);
+            await context.addInitScript(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
+            page = await context.newPage();
+        } else {
+            await browser.close().catch(() => {});
+            throw localeErr;
+        }
+    }
+
+    // Abort heavy non-essential media/font/map-tile assets for faster loading over proxies
+    await page.route('**/*', (route) => {
+        const req = route.request();
+        const type = req.resourceType();
+        const url = req.url();
+        if (type === 'media' || type === 'font' || url.includes('/maps/vt?') || url.includes('khms')) {
+            return route.abort();
+        }
+        return route.continue();
+    });
+
+    return { browser, context, page };
+}
+
+await Actor.init();
 
 try {
     const input = (await Actor.getInput()) || {};
@@ -71,104 +134,106 @@ try {
     } else {
         log.info(`Starting Google Maps Leads Scraper for ${searchStringsArray.length} queries (limit: ${maxCrawledPlacesPerSearch} places/query)`);
 
-        // Setup Proxy
-        let proxyUrl = undefined;
-        if (proxyConfiguration) {
-            const proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
-            if (proxyConfig) {
-                proxyUrl = await proxyConfig.newUrl();
-                log.info('Configured proxy successfully');
-            }
+        const proxyConfig = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : null;
+        if (proxyConfig) {
+            log.info('Configured Apify Proxy successfully');
         }
-
-        // Launch Browser
-        const launchOptions = {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-blink-features=AutomationControlled',
-            ],
-        };
-        if (proxyUrl) {
-            launchOptions.proxy = parsePlaywrightProxy(proxyUrl);
-        }
-
-        browser = await chromium.launch(launchOptions);
 
         const rawLang = (typeof language === 'string' && language.trim()) ? language.trim() : 'en';
         const safeLocale = normalizeLocale(rawLang);
 
-        const baseContextOptions = {
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-            viewport: { width: 1280, height: 900 },
-            extraHTTPHeaders: {
-                'Accept-Language': `${rawLang},${safeLocale},en;q=0.9`,
-            },
-        };
-
-        let context = await browser.newContext({
-            ...baseContextOptions,
-            locale: safeLocale,
-        });
-
         for (const query of searchStringsArray) {
             log.info(`Searching Google Maps for: "${query}"`);
-            let page;
-            try {
-                page = await context.newPage();
-            } catch (localeErr) {
-                if (localeErr.message && localeErr.message.includes('Invalid locale name')) {
-                    log.warning(`Browser rejected locale "${safeLocale}", recreating context with default locale...`);
-                    await context.close().catch(() => {});
-                    context = await browser.newContext(baseContextOptions);
-                    page = await context.newPage();
-                } else {
-                    throw localeErr;
+            const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}/?hl=${encodeURIComponent(rawLang)}`;
+
+            let session = null;
+            let navigated = false;
+
+            // Up to 3 navigation attempts: proxy IP 1 -> rotated proxy IP 2 -> direct connection fallback
+            const attempts = proxyConfig ? ['proxy', 'proxy', 'direct'] : ['direct'];
+
+            for (let i = 0; i < attempts.length; i++) {
+                const mode = attempts[i];
+                const attemptProxyUrl = mode === 'proxy' ? await proxyConfig.newUrl() : undefined;
+
+                if (session) {
+                    await session.browser.close().catch(() => {});
+                    session = null;
+                }
+
+                try {
+                    session = await launchMapsSession(attemptProxyUrl, rawLang, safeLocale);
+                    log.info(`Attempt ${i + 1}/${attempts.length} (${mode}): loading Google Maps...`);
+
+                    const response = await session.page.goto(searchUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000,
+                    });
+
+                    const status = response ? response.status() : 'unknown';
+                    const landedUrl = session.page.url();
+
+                    if (status === 429 || landedUrl.includes('/sorry/')) {
+                        log.warning(`Blocked by Google (status ${status}) on attempt ${i + 1}. Rotating...`);
+                        continue;
+                    }
+
+                    log.info(`Loaded Maps page cleanly (HTTP ${status}) -> ${landedUrl}`);
+                    navigated = true;
+                    break;
+                } catch (navErr) {
+                    log.warning(`Navigation failed on attempt ${i + 1} (${mode}): ${navErr.message}`);
                 }
             }
 
-            try {
-                const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}/?hl=${encodeURIComponent(rawLang)}`;
-                await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            if (!navigated || !session) {
+                log.error(`All navigation attempts failed for query "${query}".`);
+                if (session) await session.browser.close().catch(() => {});
+                continue;
+            }
 
-                // Handle Cookie Consent (may redirect through consent.google.com)
+            const { page, browser } = session;
+
+            try {
+                // Handle Google cookie / consent dialog if present
                 const dismissed = await dismissConsentDialog(page);
                 if (dismissed) {
+                    log.info('Dismissed Google consent dialog');
                     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
                 }
 
-                // Wait for dynamic feed or single-place redirect
-                await page.waitForTimeout(3000);
+                // Wait for either the results feed OR single-place heading
+                await page.locator('div[role="feed"], h1.DUwDvf, h1.fontHeadlineLarge').first()
+                    .waitFor({ state: 'visible', timeout: 15000 })
+                    .catch(() => {});
 
                 const currentUrl = page.url();
-
-                // Case 1: Direct redirect to a single place
-                if (currentUrl.includes('/maps/place/')) {
-                    log.info(`Direct match found for single place: ${currentUrl}`);
-                    const details = await extractPlaceDetails(page, currentUrl, includeOpeningHours);
-                    details.searchQuery = query;
-
-                    if (details.title) {
-                        await Actor.pushData(details);
-                        totalPlacesScraped++;
-                        if (details.website) placesWithWebsite++;
-                        if (details.phone) placesWithPhone++;
-                    }
-                    continue;
-                }
-
-                // Case 2: Feed of multiple listings (actually wait up to 12s for feed to appear)
                 const feedLocator = page.locator('div[role="feed"]').first();
-                const feedExists = await feedLocator.waitFor({ state: 'visible', timeout: 12000 }).then(() => true).catch(() => false);
+                const feedExists = await feedLocator.isVisible().catch(() => false);
 
-                if (!feedExists) {
-                    log.warning(`No feed or places found for query "${query}" (current URL: ${page.url()}).`);
-                    continue;
+                // Case 1: Direct redirect to a single place (no feed list)
+                if (!feedExists || currentUrl.includes('/maps/place/')) {
+                    if (feedExists) {
+                        // Prefer iterating feed when feed exists
+                    } else {
+                        log.info(`Single place or direct entity match detected: ${currentUrl}`);
+                        const details = await extractPlaceDetails(page, currentUrl, includeOpeningHours);
+                        details.searchQuery = query;
+
+                        if (details.title) {
+                            await Actor.pushData(details);
+                            totalPlacesScraped++;
+                            if (details.website) placesWithWebsite++;
+                            if (details.phone) placesWithPhone++;
+                            log.info(`[1/1] Extracted single place: "${details.title}" | Tel: ${details.phone || 'N/A'} | Web: ${details.website || 'N/A'}`);
+                        } else {
+                            log.warning(`No feed or place title found for query "${query}" (URL: ${currentUrl}).`);
+                        }
+                        continue;
+                    }
                 }
 
+                // Case 2: Feed of multiple business listings
                 const visitedUrls = new Set();
                 let placesExtractedForQuery = 0;
                 let scrollRetries = 0;
@@ -233,9 +298,7 @@ try {
             } catch (queryErr) {
                 log.error(`Error processing query "${query}": ${queryErr.message}`);
             } finally {
-                if (page && !page.isClosed()) {
-                    await page.close().catch(() => {});
-                }
+                await browser.close().catch(() => {});
             }
         }
     }
@@ -257,8 +320,5 @@ try {
     await Actor.setValue('OUTPUT', { status: 'FAILED', error: err.message });
     throw err;
 } finally {
-    if (browser) {
-        await browser.close().catch(() => {});
-    }
     await Actor.exit();
 }
