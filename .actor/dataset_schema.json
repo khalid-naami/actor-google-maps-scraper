@@ -4,67 +4,67 @@
     "type": "object",
     "properties": {
       "title": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Business or place name"
       },
       "category": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Primary business category"
       },
       "address": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Full street address"
       },
       "phone": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Phone number"
       },
       "website": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Official website URL"
       },
       "totalScore": {
-        "type": "number",
+        "type": ["number", "null"],
         "description": "Average review rating (0.0 to 5.0)"
       },
       "reviewsCount": {
-        "type": "integer",
+        "type": ["integer", "null"],
         "description": "Total number of user reviews"
       },
       "price": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Price level indicator ($ to $$$$)"
       },
       "openStatus": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Current status (e.g. Open, Closed, Open 24 hours)"
       },
       "openingHours": {
-        "type": "array",
+        "type": ["array", "null"],
         "description": "Weekly opening schedule"
       },
       "latitude": {
-        "type": "number",
+        "type": ["number", "null"],
         "description": "GPS Latitude coordinate"
       },
       "longitude": {
-        "type": "number",
+        "type": ["number", "null"],
         "description": "GPS Longitude coordinate"
       },
       "placeId": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Unique Google Place or CID identifier"
       },
       "url": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Direct Google Maps URL"
       },
       "searchQuery": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Original search keyword used"
       },
       "scrapedAt": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Timestamp of extraction"
       }
     }
