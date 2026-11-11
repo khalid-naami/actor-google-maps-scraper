@@ -47,7 +47,7 @@ export function parseRating(raw) {
  */
 export function parseReviewsCount(raw) {
     if (!raw) return 0;
-    const digits = raw.replace(/[^\d]/g, '');
+    const digits = String(raw).replace(/[^\d]/g, '');
     return digits ? parseInt(digits, 10) : 0;
 }
 
@@ -85,14 +85,105 @@ export async function dismissConsentDialog(page) {
 }
 
 /**
+ * Extract fast card summaries directly from div[role="feed"] without clicking
+ */
+export async function extractFeedCards(page) {
+    const rawCards = await page.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]');
+        if (!feed) return [];
+
+        const cards = Array.from(feed.querySelectorAll('div.Nv2PK'));
+        const results = [];
+
+        if (cards.length > 0) {
+            for (const card of cards) {
+                const linkEl = card.querySelector('a.hfpxzc, a[href*="/maps/place/"]');
+                const href = linkEl ? linkEl.getAttribute('href') : null;
+                if (!href) continue;
+
+                const titleEl = card.querySelector('.qBF1Pd, .fontHeadlineSmall');
+                const title = (titleEl?.textContent || linkEl?.getAttribute('aria-label') || '').trim();
+
+                const ratingEl = card.querySelector('.MW4etd, span[role="img"][aria-label*="star" i]');
+                const ratingRaw = ratingEl?.textContent?.trim() || ratingEl?.getAttribute('aria-label') || '';
+
+                const reviewsEl = card.querySelector('.UY7F9');
+                const reviewsRaw = reviewsEl?.textContent?.trim() || '';
+
+                const metaLines = Array.from(card.querySelectorAll('.W4Efsd'))
+                    .map((el) => el.textContent?.trim())
+                    .filter(Boolean);
+
+                results.push({ href, title, ratingRaw, reviewsRaw, metaLines });
+            }
+        } else {
+            // Fallback selector if Google changed .Nv2PK
+            const links = Array.from(feed.querySelectorAll('a[href*="/maps/place/"]'));
+            for (const linkEl of links) {
+                const href = linkEl.getAttribute('href');
+                if (!href) continue;
+                const title = (linkEl.getAttribute('aria-label') || linkEl.textContent || '').trim();
+                results.push({ href, title, ratingRaw: '', reviewsRaw: '', metaLines: [] });
+            }
+        }
+
+        return results;
+    }).catch(() => []);
+
+    return rawCards.map((c) => {
+        const { latitude, longitude } = parseCoordinatesFromUrl(c.href);
+        const cidMatch = c.href.match(/0x[0-9a-fA-F]+:0x[0-9a-fA-F]+/);
+
+        // Best-effort parse category & address from feed metaLines
+        let category = null;
+        let address = null;
+        let phone = null;
+        const cleanLines = c.metaLines
+            .map((l) => l.replace(/\s+/g, ' ').trim())
+            .filter((l) => l && !l.startsWith('·'));
+
+        if (cleanLines.length > 0) {
+            const parts = cleanLines[0].split('·').map((s) => s.trim()).filter(Boolean);
+            if (parts[0] && !/^\d/.test(parts[0]) && !parts[0].includes('(')) {
+                category = parts[0];
+            }
+            if (parts.length > 1) {
+                const candidateAddr = parts[parts.length - 1];
+                if (candidateAddr && !candidateAddr.startsWith('£') && !candidateAddr.startsWith('$') && !candidateAddr.startsWith('€')) {
+                    address = candidateAddr;
+                }
+            }
+        }
+        for (const line of cleanLines) {
+            const phoneMatch = line.match(/(\+?\d[\d\s\-()]{6,}\d)/);
+            if (phoneMatch && !line.includes(':')) {
+                phone = cleanPhone(phoneMatch[1]);
+            }
+        }
+
+        return {
+            title: c.title || null,
+            category,
+            address,
+            phone,
+            website: null,
+            totalScore: parseRating(c.ratingRaw),
+            reviewsCount: parseReviewsCount(c.reviewsRaw),
+            openStatus: null,
+            openingHours: null,
+            latitude,
+            longitude,
+            placeId: cidMatch ? cidMatch[0] : null,
+            url: c.href,
+            scrapedAt: new Date().toISOString(),
+        };
+    });
+}
+
+/**
  * Extract listing details from the active place detail panel in Playwright
  */
 export async function extractPlaceDetails(page, fallbackUrl = '', includeOpeningHours = true) {
-    // Wait briefly for place title heading to appear in details pane
-    await page.locator('h1.DUwDvf, h1.fontHeadlineLarge').first()
-        .waitFor({ state: 'visible', timeout: 3500 })
-        .catch(() => {});
-
     const currentUrl = page.url() || fallbackUrl;
     let coords = parseCoordinatesFromUrl(fallbackUrl);
     if (coords.latitude === null) {
@@ -105,14 +196,15 @@ export async function extractPlaceDetails(page, fallbackUrl = '', includeOpening
     const titleSelectors = [
         'h1.DUwDvf',
         'h1.fontHeadlineLarge',
-        'h1',
-        'div.qBF1Pd',
     ];
     for (const sel of titleSelectors) {
         const el = page.locator(sel).first();
         if (await el.isVisible().catch(() => false)) {
-            title = (await el.innerText()).trim();
-            if (title) break;
+            const txt = (await el.innerText().catch(() => '')).trim();
+            if (txt && txt.toLowerCase() !== 'results') {
+                title = txt;
+                break;
+            }
         }
     }
 
@@ -136,7 +228,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '', includeOpening
     // Extract Category
     let category = null;
     try {
-        const catEl = page.locator('button[jsaction*="category"], div.fontBodyMedium button').first();
+        const catEl = page.locator('button[jsaction*="category"]').first();
         if (await catEl.isVisible().catch(() => false)) {
             category = (await catEl.innerText()).trim();
         }
@@ -150,7 +242,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '', includeOpening
         const addrEl = page.locator('button[data-item-id="address"]').first();
         if (await addrEl.isVisible().catch(() => false)) {
             const fullText = await addrEl.innerText();
-            address = fullText.replace(/^Address:\s*/i, '').trim();
+            address = fullText.replace(/^Address:\s*/i, '').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim();
         }
     } catch {
         // Fallback
