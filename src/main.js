@@ -265,21 +265,23 @@ try {
 
                         // Enrich card with full details (phone, website, full address, hours) via panel click
                         try {
-                            const linkLocator = page.locator(`div[role="feed"] a[href="${card.url.replace(/"/g, '\\"')}"]`).first();
+                            const escapedHref = card.url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                            const linkLocator = page.locator(`div[role="feed"] a[href="${escapedHref}"]`).first();
                             const canClick = await linkLocator.isVisible().catch(() => false);
 
                             if (canClick) {
+                                const prevHref = page.url();
                                 await linkLocator.scrollIntoViewIfNeeded().catch(() => {});
                                 await linkLocator.click({ force: true, timeout: 3000 }).catch(() => {});
 
                                 // Wait until right-hand detail panel updates to this place
                                 const updated = await page.waitForFunction(
-                                    (prevTitle) => {
+                                    ({ prevTitle, oldHref }) => {
                                         const h1 = document.querySelector('h1.DUwDvf, h1.fontHeadlineLarge');
                                         const txt = h1 ? h1.textContent.trim() : '';
-                                        return txt.length > 0 && txt.toLowerCase() !== 'results' && txt !== prevTitle;
+                                        return txt.length > 0 && txt.toLowerCase() !== 'results' && (txt !== prevTitle || window.location.href !== oldHref);
                                     },
-                                    lastPanelTitle,
+                                    { prevTitle: lastPanelTitle, oldHref: prevHref },
                                     { timeout: 3000 }
                                 ).then(() => true).catch(() => false);
 
