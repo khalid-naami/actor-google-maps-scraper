@@ -19,7 +19,7 @@ Extract targeted B2B leads, local business contacts, phone numbers, websites, ad
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `searchStringsArray` | Array | `["cafes in London"]` | List of keywords or locations to search (e.g. `'dentists in New York'`, `'plumbers in Berlin'`). |
+| `searchStringsArray` | Array | `["restaurants in New York"]` | List of keywords or locations to search (e.g. `'dentists in New York'`, `'plumbers in Berlin'`). |
 | `maxCrawledPlacesPerSearch` | Integer | `40` | Maximum number of places to scrape per search query. |
 | `language` | String | `"en"` | Language code for names and descriptions (e.g. `en`, `es`, `fr`, `de`, `ar`). |
 | `includeOpeningHours` | Boolean | `true` | Extract full weekly operating schedule. |
@@ -54,7 +54,7 @@ Each dataset record contains rich business intelligence:
   "longitude": -0.126584,
   "placeId": "0x487604cc863bc0d9:0x8992ad34e12e138a",
   "url": "https://www.google.com/maps/place/Monmouth+Coffee+Company/...",
-  "searchQuery": "cafes in London",
+  "searchQuery": "restaurants in New York",
   "scrapedAt": "2026-11-09T13:40:00.000Z"
 }
 ```
