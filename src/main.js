@@ -1,6 +1,6 @@
 import { Actor, log } from 'apify';
 import { chromium } from 'playwright';
-import { dismissConsentDialog, extractPlaceDetails } from './extractors.js';
+import { dismissConsentDialog, extractFeedCards, extractPlaceDetails } from './extractors.js';
 
 const LOCALE_MAP = {
     en: 'en-US',
@@ -56,6 +56,11 @@ async function launchMapsSession(proxyUrl, rawLang, safeLocale) {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-webgl',
+            '--disable-3d-apis',
+            '--disable-accelerated-2d-canvas',
+            '--disable-background-networking',
             '--disable-blink-features=AutomationControlled',
         ],
     };
@@ -99,12 +104,21 @@ async function launchMapsSession(proxyUrl, rawLang, safeLocale) {
         }
     }
 
-    // Abort heavy non-essential media/font/map-tile assets for faster loading over proxies
+    // Abort heavy assets (images, media, fonts, map tiles, WebGL data) to prevent Docker OOM crashes
     await page.route('**/*', (route) => {
         const req = route.request();
         const type = req.resourceType();
         const url = req.url();
-        if (type === 'media' || type === 'font' || url.includes('/maps/vt?') || url.includes('khms')) {
+        if (
+            type === 'image' ||
+            type === 'media' ||
+            type === 'font' ||
+            url.includes('/maps/vt?') ||
+            url.includes('khms') ||
+            url.includes('streetviewpixels') ||
+            url.includes('googleusercontent.com') ||
+            url.includes('ggpht.com')
+        ) {
             return route.abort();
         }
         return route.continue();
@@ -149,7 +163,6 @@ try {
             let session = null;
             let navigated = false;
 
-            // Up to 3 navigation attempts: proxy IP 1 -> rotated proxy IP 2 -> direct connection fallback
             const attempts = proxyConfig ? ['proxy', 'proxy', 'direct'] : ['direct'];
 
             for (let i = 0; i < attempts.length; i++) {
@@ -211,76 +224,109 @@ try {
                 const feedLocator = page.locator('div[role="feed"]').first();
                 const feedExists = await feedLocator.isVisible().catch(() => false);
 
-                // Case 1: Direct redirect to a single place (no feed list)
-                if (!feedExists || currentUrl.includes('/maps/place/')) {
-                    if (feedExists) {
-                        // Prefer iterating feed when feed exists
-                    } else {
-                        log.info(`Single place or direct entity match detected: ${currentUrl}`);
-                        const details = await extractPlaceDetails(page, currentUrl, includeOpeningHours);
-                        details.searchQuery = query;
+                // Case 1: Direct single-place page
+                if (!feedExists) {
+                    log.info(`Single place or direct entity match detected: ${currentUrl}`);
+                    const details = await extractPlaceDetails(page, currentUrl, includeOpeningHours);
+                    details.searchQuery = query;
 
-                        if (details.title) {
-                            await Actor.pushData(details);
-                            totalPlacesScraped++;
-                            if (details.website) placesWithWebsite++;
-                            if (details.phone) placesWithPhone++;
-                            log.info(`[1/1] Extracted single place: "${details.title}" | Tel: ${details.phone || 'N/A'} | Web: ${details.website || 'N/A'}`);
-                        } else {
-                            log.warning(`No feed or place title found for query "${query}" (URL: ${currentUrl}).`);
-                        }
-                        continue;
+                    if (details.title) {
+                        await Actor.pushData(details);
+                        totalPlacesScraped++;
+                        if (details.website) placesWithWebsite++;
+                        if (details.phone) placesWithPhone++;
+                        log.info(`[1/1] Extracted single place: "${details.title}" | Tel: ${details.phone || 'N/A'} | Web: ${details.website || 'N/A'}`);
+                    } else {
+                        log.warning(`No feed or place title found for query "${query}" (URL: ${currentUrl}).`);
                     }
+                    continue;
                 }
+
+                log.info('Google Maps feed container detected. Extracting business cards...');
 
                 // Case 2: Feed of multiple business listings
                 const visitedUrls = new Set();
                 let placesExtractedForQuery = 0;
                 let scrollRetries = 0;
+                let lastPanelTitle = '';
 
                 while (placesExtractedForQuery < maxCrawledPlacesPerSearch && scrollRetries < 5) {
-                    const placeLinks = await page.locator('div[role="feed"] a[href*="/maps/place/"]').all();
+                    const cards = await extractFeedCards(page);
                     let newlyFound = 0;
 
-                    for (const link of placeLinks) {
+                    for (const card of cards) {
                         if (placesExtractedForQuery >= maxCrawledPlacesPerSearch) break;
+                        if (!card.url || visitedUrls.has(card.url)) continue;
 
-                        const href = await link.getAttribute('href').catch(() => null);
-                        if (!href || visitedUrls.has(href)) continue;
-
-                        visitedUrls.add(href);
+                        visitedUrls.add(card.url);
                         newlyFound++;
 
+                        let finalRecord = { ...card, searchQuery: query };
+
+                        // Enrich card with full details (phone, website, full address, hours) via panel click
                         try {
-                            await link.scrollIntoViewIfNeeded().catch(() => {});
-                            await link.click({ timeout: 4000 }).catch(() => {});
-                            await page.waitForTimeout(1800);
+                            const linkLocator = page.locator(`div[role="feed"] a[href="${card.url.replace(/"/g, '\\"')}"]`).first();
+                            const canClick = await linkLocator.isVisible().catch(() => false);
 
-                            const details = await extractPlaceDetails(page, href, includeOpeningHours);
-                            details.searchQuery = query;
+                            if (canClick) {
+                                await linkLocator.scrollIntoViewIfNeeded().catch(() => {});
+                                await linkLocator.click({ force: true, timeout: 3000 }).catch(() => {});
 
-                            if (details.title) {
-                                await Actor.pushData(details);
-                                placesExtractedForQuery++;
-                                totalPlacesScraped++;
-                                if (details.website) placesWithWebsite++;
-                                if (details.phone) placesWithPhone++;
+                                // Wait until right-hand detail panel updates to this place
+                                const updated = await page.waitForFunction(
+                                    (prevTitle) => {
+                                        const h1 = document.querySelector('h1.DUwDvf, h1.fontHeadlineLarge');
+                                        const txt = h1 ? h1.textContent.trim() : '';
+                                        return txt.length > 0 && txt.toLowerCase() !== 'results' && txt !== prevTitle;
+                                    },
+                                    lastPanelTitle,
+                                    { timeout: 3000 }
+                                ).then(() => true).catch(() => false);
 
-                                log.info(`[${placesExtractedForQuery}/${maxCrawledPlacesPerSearch}] Extracted: "${details.title}" | Tel: ${details.phone || 'N/A'} | Web: ${details.website || 'N/A'}`);
+                                if (updated) {
+                                    const panelDetails = await extractPlaceDetails(page, card.url, includeOpeningHours);
+                                    if (panelDetails.title) {
+                                        lastPanelTitle = panelDetails.title;
+                                        finalRecord = {
+                                            ...finalRecord,
+                                            title: panelDetails.title || finalRecord.title,
+                                            category: panelDetails.category || finalRecord.category,
+                                            address: panelDetails.address || finalRecord.address,
+                                            phone: panelDetails.phone || finalRecord.phone,
+                                            website: panelDetails.website || finalRecord.website,
+                                            totalScore: panelDetails.totalScore ?? finalRecord.totalScore,
+                                            reviewsCount: panelDetails.reviewsCount || finalRecord.reviewsCount,
+                                            openStatus: panelDetails.openStatus || finalRecord.openStatus,
+                                            openingHours: panelDetails.openingHours || finalRecord.openingHours,
+                                            latitude: panelDetails.latitude ?? finalRecord.latitude,
+                                            longitude: panelDetails.longitude ?? finalRecord.longitude,
+                                        };
+                                    }
+                                }
                             }
-                        } catch (itemErr) {
-                            log.debug(`Failed extracting item detail: ${itemErr.message}`);
+                        } catch (detailErr) {
+                            log.debug(`Detail click skipped for "${card.title}", using card summary: ${detailErr.message}`);
+                        }
+
+                        if (finalRecord.title) {
+                            await Actor.pushData(finalRecord);
+                            placesExtractedForQuery++;
+                            totalPlacesScraped++;
+                            if (finalRecord.website) placesWithWebsite++;
+                            if (finalRecord.phone) placesWithPhone++;
+
+                            log.info(`[${placesExtractedForQuery}/${maxCrawledPlacesPerSearch}] Extracted: "${finalRecord.title}" | Tel: ${finalRecord.phone || 'N/A'} | Web: ${finalRecord.website || 'N/A'}`);
                         }
                     }
 
                     if (placesExtractedForQuery < maxCrawledPlacesPerSearch) {
                         const scrollSuccess = await feedLocator.evaluate((el) => {
                             const prevScroll = el.scrollTop;
-                            el.scrollBy(0, 1000);
+                            el.scrollBy(0, 1200);
                             return el.scrollTop > prevScroll;
                         }).catch(() => false);
 
-                        await page.waitForTimeout(2000);
+                        await page.waitForTimeout(1500);
 
                         const endBanner = page.locator('text="You\'ve reached the end of the list"').first();
                         const isEnd = await endBanner.isVisible().catch(() => false);
