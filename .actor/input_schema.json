@@ -6,9 +6,9 @@
     "searchStringsArray": {
       "title": "Search Terms / Locations",
       "type": "array",
-      "description": "List of keywords or locations to search (e.g. 'plumbers in London', 'dentists in Chicago', 'restaurants in Paris').",
+      "description": "List of keywords or locations to search (e.g. 'restaurants in New York', 'dentists in Chicago', 'hotels in Paris').",
       "prefill": [
-        "cafes in London"
+        "restaurants in New York"
       ],
       "editor": "json"
     },
