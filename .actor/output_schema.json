@@ -1,25 +1,18 @@
 {
-  "actorSpecification": 1,
-  "fields": {
-    "totalQueries": {
-      "type": "integer",
-      "title": "Total Search Queries Processed"
-    },
-    "totalPlacesScraped": {
-      "type": "integer",
-      "title": "Total Places Extracted"
-    },
-    "placesWithWebsite": {
-      "type": "integer",
-      "title": "Places With Website"
-    },
-    "placesWithPhone": {
-      "type": "integer",
-      "title": "Places With Phone Number"
-    },
-    "status": {
+  "actorOutputSchemaVersion": 1,
+  "title": "Google Maps B2B Leads Scraper (Places, Phone, Website & Reviews) Output",
+  "properties": {
+    "results": {
       "type": "string",
-      "title": "Run Status"
+      "title": "Dataset Records",
+      "description": "Scraped records stored in the default Apify dataset.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "overview": {
+      "type": "string",
+      "title": "Executive Summary Payload",
+      "description": "High-level summary report and execution metrics stored in Key-Value store.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
     }
   }
 }
