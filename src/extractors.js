@@ -3,15 +3,22 @@
  */
 
 /**
- * Parse coordinates from Google Maps URL (e.g., .../@40.7127753,-74.0059728,15z/...)
+ * Parse coordinates from Google Maps URL (e.g., .../@40.7127753,-74.0059728,15z/... or !3d40.712!4d-74.005)
  */
 export function parseCoordinatesFromUrl(url) {
     if (!url) return { latitude: null, longitude: null };
-    const match = url.match(/@([0-9.-]+),([0-9.-]+)/);
-    if (match) {
+    const atMatch = url.match(/@([0-9.-]+),([0-9.-]+)/);
+    if (atMatch) {
         return {
-            latitude: parseFloat(match[1]),
-            longitude: parseFloat(match[2]),
+            latitude: parseFloat(atMatch[1]),
+            longitude: parseFloat(atMatch[2]),
+        };
+    }
+    const bangMatch = url.match(/!3d([0-9.-]+)!4d([0-9.-]+)/);
+    if (bangMatch) {
+        return {
+            latitude: parseFloat(bangMatch[1]),
+            longitude: parseFloat(bangMatch[2]),
         };
     }
     return { latitude: null, longitude: null };
@@ -50,6 +57,7 @@ export function parseReviewsCount(raw) {
 export async function dismissConsentDialog(page) {
     const consentSelectors = [
         'button:has-text("Accept all")',
+        'input[type="submit"][value*="Accept" i]',
         'button:has-text("I agree")',
         'button:has-text("Agree")',
         'button:has-text("Tout accepter")',
@@ -64,9 +72,9 @@ export async function dismissConsentDialog(page) {
     for (const selector of consentSelectors) {
         try {
             const btn = page.locator(selector).first();
-            if (await btn.isVisible({ timeout: 1500 })) {
+            if (await btn.isVisible().catch(() => false)) {
                 await btn.click();
-                await page.waitForTimeout(1000);
+                await page.waitForTimeout(2000);
                 return true;
             }
         } catch {
@@ -79,21 +87,30 @@ export async function dismissConsentDialog(page) {
 /**
  * Extract listing details from the active place detail panel in Playwright
  */
-export async function extractPlaceDetails(page, fallbackUrl = '') {
+export async function extractPlaceDetails(page, fallbackUrl = '', includeOpeningHours = true) {
+    // Wait briefly for place title heading to appear in details pane
+    await page.locator('h1.DUwDvf, h1.fontHeadlineLarge').first()
+        .waitFor({ state: 'visible', timeout: 3500 })
+        .catch(() => {});
+
     const currentUrl = page.url() || fallbackUrl;
-    const { latitude, longitude } = parseCoordinatesFromUrl(currentUrl);
+    let coords = parseCoordinatesFromUrl(fallbackUrl);
+    if (coords.latitude === null) {
+        coords = parseCoordinatesFromUrl(currentUrl);
+    }
+    const { latitude, longitude } = coords;
 
     // Extract Title
     let title = null;
     const titleSelectors = [
-        'h1.fontHeadlineLarge',
         'h1.DUwDvf',
+        'h1.fontHeadlineLarge',
         'h1',
         'div.qBF1Pd',
     ];
     for (const sel of titleSelectors) {
         const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await el.isVisible().catch(() => false)) {
             title = (await el.innerText()).trim();
             if (title) break;
         }
@@ -104,12 +121,12 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     let reviewsCount = 0;
     try {
         const ratingEl = page.locator('div.F7nice span[aria-hidden="true"]').first();
-        if (await ratingEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await ratingEl.isVisible().catch(() => false)) {
             totalScore = parseRating(await ratingEl.innerText());
         }
 
-        const reviewsEl = page.locator('div.F7nice span:nth-child(2) span').first();
-        if (await reviewsEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        const reviewsEl = page.locator('div.F7nice span[aria-label*="review" i], div.F7nice span:nth-child(2) span').first();
+        if (await reviewsEl.isVisible().catch(() => false)) {
             reviewsCount = parseReviewsCount(await reviewsEl.innerText());
         }
     } catch {
@@ -120,7 +137,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     let category = null;
     try {
         const catEl = page.locator('button[jsaction*="category"], div.fontBodyMedium button').first();
-        if (await catEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await catEl.isVisible().catch(() => false)) {
             category = (await catEl.innerText()).trim();
         }
     } catch {
@@ -131,7 +148,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     let address = null;
     try {
         const addrEl = page.locator('button[data-item-id="address"]').first();
-        if (await addrEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await addrEl.isVisible().catch(() => false)) {
             const fullText = await addrEl.innerText();
             address = fullText.replace(/^Address:\s*/i, '').trim();
         }
@@ -143,7 +160,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     let website = null;
     try {
         const webEl = page.locator('a[data-item-id="authority"]').first();
-        if (await webEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await webEl.isVisible().catch(() => false)) {
             website = await webEl.getAttribute('href');
         }
     } catch {
@@ -154,7 +171,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     let phone = null;
     try {
         const phoneEl = page.locator('button[data-item-id*="phone"]').first();
-        if (await phoneEl.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await phoneEl.isVisible().catch(() => false)) {
             const phoneText = await phoneEl.innerText();
             phone = cleanPhone(phoneText);
         }
@@ -165,25 +182,26 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
     // Extract Open Status & Hours
     let openStatus = null;
     let openingHours = [];
-    try {
-        const hoursSummary = page.locator('div[data-item-id*="hours"] span.fontBodyMedium').first();
-        if (await hoursSummary.isVisible({ timeout: 500 }).catch(() => false)) {
-            openStatus = (await hoursSummary.innerText()).trim();
-        }
+    if (includeOpeningHours) {
+        try {
+            const hoursSummary = page.locator('div[data-item-id*="hours"] span.fontBodyMedium').first();
+            if (await hoursSummary.isVisible().catch(() => false)) {
+                openStatus = (await hoursSummary.innerText()).trim();
+            }
 
-        // Try extracting opening hours table if open
-        const hoursTableRows = await page.locator('table.eKjhZj tr').all();
-        for (const row of hoursTableRows) {
-            const rowText = (await row.innerText()).replace(/\n/g, ' ').trim();
-            if (rowText) openingHours.push(rowText);
+            const hoursTableRows = await page.locator('table.eKjhZj tr').all();
+            for (const row of hoursTableRows) {
+                const rowText = (await row.innerText()).replace(/\n/g, ' ').trim();
+                if (rowText) openingHours.push(rowText);
+            }
+        } catch {
+            // Fallback
         }
-    } catch {
-        // Fallback
     }
 
     // Extract Place ID or CID
     let placeId = null;
-    const cidMatch = currentUrl.match(/0x[0-9a-fA-F]+:0x[0-9a-fA-F]+/);
+    const cidMatch = (fallbackUrl || currentUrl).match(/0x[0-9a-fA-F]+:0x[0-9a-fA-F]+/);
     if (cidMatch) {
         placeId = cidMatch[0];
     }
@@ -201,7 +219,7 @@ export async function extractPlaceDetails(page, fallbackUrl = '') {
         latitude,
         longitude,
         placeId,
-        url: currentUrl,
+        url: fallbackUrl || currentUrl,
         scrapedAt: new Date().toISOString(),
     };
 }
