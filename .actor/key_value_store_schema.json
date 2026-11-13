@@ -1,0 +1,15 @@
+{
+    "actorKeyValueStoreSchemaVersion": 1,
+    "title": "Google Maps B2B Leads Scraper Key-Value Store",
+    "description": "Structured OUTPUT execution summary and diagnostics",
+    "collections": {
+        "output": {
+            "title": "Executive Summary Payload",
+            "description": "High-level summary report and execution metrics stored in Key-Value store.",
+            "key": "OUTPUT",
+            "contentTypes": [
+                "application/json"
+            ]
+        }
+    }
+}
