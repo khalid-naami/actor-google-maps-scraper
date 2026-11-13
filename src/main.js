@@ -127,7 +127,37 @@ async function launchMapsSession(proxyUrl, rawLang, safeLocale) {
     return { browser, context, page };
 }
 
+function sanitizeRecord(value) {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : undefined;
+    }
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => sanitizeRecord(item))
+            .filter((item) => item !== null && item !== undefined);
+    }
+    if (typeof value === 'object' && !(value instanceof Date)) {
+        const clean = {};
+        for (const [k, v] of Object.entries(value)) {
+            const next = sanitizeRecord(v);
+            if (next !== null && next !== undefined) {
+                clean[k] = next;
+            }
+        }
+        return clean;
+    }
+    return value;
+}
+
+function isProxyTransportError(errOrStatus) {
+    const msg = String(errOrStatus?.message || errOrStatus || '');
+    return errOrStatus === 597 || errOrStatus === 407 || /597|UPSTREAM407|407|Proxy responded with|tunneling socket|ECONNREFUSED/i.test(msg);
+}
+
 await Actor.init();
+
+let hasFailed = false;
 
 try {
     const input = (await Actor.getInput()) || {};
@@ -148,9 +178,16 @@ try {
     } else {
         log.info(`Starting Google Maps Leads Scraper for ${searchStringsArray.length} queries (limit: ${maxCrawledPlacesPerSearch} places/query)`);
 
-        const proxyConfig = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : null;
-        if (proxyConfig) {
-            log.info('Configured Apify Proxy successfully');
+        let proxyConfig = null;
+        if (proxyConfiguration) {
+            try {
+                proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
+                if (proxyConfig) {
+                    log.info('Configured Apify Proxy successfully');
+                }
+            } catch (proxyErr) {
+                log.warning(`Apify Proxy initialization skipped (${proxyErr.message}); falling back to direct connection.`);
+            }
         }
 
         const rawLang = (typeof language === 'string' && language.trim()) ? language.trim() : 'en';
@@ -167,7 +204,7 @@ try {
 
             for (let i = 0; i < attempts.length; i++) {
                 const mode = attempts[i];
-                const attemptProxyUrl = mode === 'proxy' ? await proxyConfig.newUrl() : undefined;
+                const attemptProxyUrl = mode === 'proxy' && proxyConfig ? await proxyConfig.newUrl() : undefined;
 
                 if (session) {
                     await session.browser.close().catch(() => {});
@@ -196,6 +233,10 @@ try {
                     break;
                 } catch (navErr) {
                     log.warning(`Navigation failed on attempt ${i + 1} (${mode}): ${navErr.message}`);
+                    if (mode === 'proxy' && isProxyTransportError(navErr)) {
+                        log.warning('Proxy transport error detected; disabling broken proxy for subsequent requests.');
+                        proxyConfig = null;
+                    }
                 }
             }
 
@@ -231,7 +272,7 @@ try {
                     details.searchQuery = query;
 
                     if (details.title) {
-                        await Actor.pushData(details);
+                        await Actor.pushData(sanitizeRecord(details));
                         totalPlacesScraped++;
                         if (details.website) placesWithWebsite++;
                         if (details.phone) placesWithPhone++;
@@ -311,7 +352,7 @@ try {
                         }
 
                         if (finalRecord.title) {
-                            await Actor.pushData(finalRecord);
+                            await Actor.pushData(sanitizeRecord(finalRecord));
                             placesExtractedForQuery++;
                             totalPlacesScraped++;
                             if (finalRecord.website) placesWithWebsite++;
@@ -356,17 +397,24 @@ try {
         totalPlacesScraped,
         placesWithWebsite,
         placesWithPhone,
-        status: 'SUCCEEDED',
+        status: totalPlacesScraped > 0 ? 'SUCCEEDED' : 'FAILED',
         scrapedAt: new Date().toISOString(),
     };
 
     await Actor.setValue('OUTPUT', summary);
+    if (totalPlacesScraped === 0) {
+        hasFailed = true;
+        await Actor.fail('Extracted 0 Google Maps places.');
+    }
     log.info(`Scraping finished successfully! Total places scraped: ${totalPlacesScraped}`);
 
 } catch (err) {
+    hasFailed = true;
     log.error(`Fatal execution error: ${err.message}`, { stack: err.stack });
-    await Actor.setValue('OUTPUT', { status: 'FAILED', error: err.message });
-    throw err;
+    await Actor.setValue('OUTPUT', { status: 'FAILED', error: err.message }).catch(() => {});
+    await Actor.fail(err.message);
 } finally {
-    await Actor.exit();
+    if (!hasFailed) {
+        await Actor.exit();
+    }
 }
